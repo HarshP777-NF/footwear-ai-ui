@@ -1,6 +1,7 @@
 
 import React, { createContext, useContext, useState } from 'react';
 import { toast } from '@/components/ui/use-toast';
+import { API_CONFIG } from '@/config';
 
 interface ChatMessage {
   id: string;
@@ -58,27 +59,62 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
     
-    // Mock API call to your n8n chatbot
     try {
-      // In a real app, this would be a fetch to your n8n backend
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Prepare request data including user preferences and message
+      const requestData = {
+        message: content,
+        preferences: preferences,
+        timestamp: new Date().toISOString(),
+      };
       
-      // Mock response with random image
+      console.log("Sending request to n8n:", requestData);
+      
+      // Send request to n8n webhook
+      const response = await fetch(API_CONFIG.n8nWebhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      // Parse n8n response
+      const data = await response.json();
+      console.log("Received response from n8n:", data);
+      
+      // Create bot message from response
       const botMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'bot',
-        content: `Here's a suggestion based on your ${preferences.style || 'preferred'} style and ${preferences.size || 'size'}.`,
+        content: data.message || "Here's a suggestion based on your preferences.",
         timestamp: new Date(),
-        imageUrl: `https://picsum.photos/500/300?random=${Math.floor(Math.random() * 100)}`
+        imageUrl: data.imageUrl || `https://picsum.photos/500/300?random=${Math.floor(Math.random() * 100)}`
       };
       
       setMessages(prev => [...prev, botMessage]);
     } catch (error) {
+      console.error("Error calling n8n webhook:", error);
+      
+      // Fallback response if n8n call fails
       toast({
         variant: "destructive",
-        title: "Error",
-        description: "Failed to get response from chatbot.",
+        title: "Connection Error",
+        description: "Failed to connect to n8n service. Please try again later.",
       });
+      
+      // Add fallback bot message
+      const fallbackMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'bot',
+        content: "I'm having trouble connecting to the service right now. Please try again later.",
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, fallbackMessage]);
     } finally {
       setIsLoading(false);
     }

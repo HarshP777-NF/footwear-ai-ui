@@ -1,149 +1,130 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
-interface VoiceRecognitionProps {
-  onResult?: (transcript: string) => void;
-  onEnd?: () => void;
-  language?: string;
-}
-
-interface VoiceRecognition {
-  isListening: boolean;
-  transcript: string;
-  startListening: () => void;
-  stopListening: () => void;
-  hasPermission: boolean | null;
-  error: string | null;
-}
-
-// This is a type for the SpeechRecognition API which isn't fully typed in TypeScript
+// Define the interface for SpeechRecognition
 interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
   resultIndex: number;
+  results: SpeechRecognitionResultList;
 }
 
-// This is a simple polyfill check for the various browser implementations
-const SpeechRecognition = 
-  window.SpeechRecognition ||
-  window.webkitSpeechRecognition ||
-  (window as any).mozSpeechRecognition ||
-  (window as any).msSpeechRecognition;
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  [index: number]: SpeechRecognitionAlternative;
+}
 
-export const useVoiceRecognition = ({
-  onResult,
-  onEnd,
-  language = 'en-US'
-}: VoiceRecognitionProps = {}): VoiceRecognition => {
-  const [recognition, setRecognition] = useState<any>(null);
+interface SpeechRecognitionResultList {
+  length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onend: ((event: Event) => void) | null;
+}
+
+// Add global type declarations
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognition;
+    webkitSpeechRecognition?: new () => SpeechRecognition;
+  }
+}
+
+interface UseVoiceRecognitionOptions {
+  onResult?: (text: string) => void;
+  onEnd?: () => void;
+  lang?: string;
+}
+
+export const useVoiceRecognition = (options: UseVoiceRecognitionOptions = {}) => {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
 
-  // Initialize the recognition object
+  // SpeechRecognition setup
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recognition = SpeechRecognition ? new SpeechRecognition() : null;
+
   useEffect(() => {
-    if (SpeechRecognition) {
-      const recognitionInstance = new SpeechRecognition();
-      recognitionInstance.continuous = true;
-      recognitionInstance.interimResults = true;
-      recognitionInstance.lang = language;
-
-      setRecognition(recognitionInstance);
-    } else {
-      setError('Speech recognition is not supported in this browser');
-    }
-
-    return () => {
-      if (recognition) {
-        recognition.stop();
-      }
-    };
-  }, [language]);
-
-  // Set up event listeners for the recognition object
-  useEffect(() => {
-    if (!recognition) return;
-
-    const handleResult = (event: SpeechRecognitionEvent) => {
-      const transcript = Array.from(event.results)
-        .map(result => result[0])
-        .map(result => result.transcript)
-        .join('');
-      
-      setTranscript(transcript);
-      if (onResult) onResult(transcript);
-    };
-
-    const handleEnd = () => {
-      setIsListening(false);
-      if (onEnd) onEnd();
-    };
-
-    const handleError = (event: Event) => {
-      if ((event as any).error === 'not-allowed') {
-        setHasPermission(false);
-        setError('Microphone permission denied');
-      } else {
-        setError(`Speech recognition error: ${(event as any).error || 'unknown error'}`);
-      }
-      setIsListening(false);
-    };
-
-    recognition.onresult = handleResult;
-    recognition.onend = handleEnd;
-    recognition.onerror = handleError;
-
-    return () => {
-      recognition.onresult = null;
-      recognition.onend = null;
-      recognition.onerror = null;
-    };
-  }, [recognition, onResult, onEnd]);
-
-  // Check for microphone permission
-  useEffect(() => {
-    const checkPermission = async () => {
-      try {
-        const result = await navigator.permissions.query({ name: 'microphone' as any });
-        setHasPermission(result.state === 'granted');
-        
-        result.onchange = () => {
-          setHasPermission(result.state === 'granted');
-        };
-      } catch (error) {
-        // Browser might not support permissions API for microphone
-        // In that case we'll find out when we try to start listening
-        setHasPermission(null);
-      }
-    };
-
-    checkPermission();
-  }, []);
-
-  const startListening = useCallback(() => {
-    setError(null);
     if (!recognition) {
-      setError('Speech recognition is not supported');
+      setError('Speech recognition is not supported in this browser.');
+      setHasPermission(false);
       return;
     }
 
-    try {
-      recognition.start();
-      setIsListening(true);
-      setTranscript('');
-    } catch (error) {
-      console.error('Error starting speech recognition:', error);
-      setError('Failed to start speech recognition');
-      setIsListening(false);
-    }
+    // Check for microphone permission
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(() => {
+        setHasPermission(true);
+        setError(null);
+      })
+      .catch(() => {
+        setHasPermission(false);
+        setError('Microphone access denied');
+      });
   }, [recognition]);
 
-  const stopListening = useCallback(() => {
-    if (recognition && isListening) {
-      recognition.stop();
+  useEffect(() => {
+    if (!recognition) return;
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = options.lang || 'en-US';
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = Array.from(event.results)
+        .map(result => result[0].transcript)
+        .join(' ');
+
+      setTranscript(transcript);
+      if (options.onResult) {
+        options.onResult(transcript);
+      }
+    };
+
+    recognition.onerror = (event: Event) => {
+      console.error('Speech recognition error', event);
+      setError('Error in speech recognition');
+    };
+
+    recognition.onend = () => {
       setIsListening(false);
-    }
-  }, [recognition, isListening]);
+      if (options.onEnd) {
+        options.onEnd();
+      }
+    };
+  }, [recognition, options]);
+
+  const startListening = useCallback(() => {
+    if (!recognition || !hasPermission) return;
+
+    setError(null);
+    setTranscript('');
+    recognition.start();
+    setIsListening(true);
+  }, [recognition, hasPermission]);
+
+  const stopListening = useCallback(() => {
+    if (!recognition) return;
+
+    recognition.stop();
+    setIsListening(false);
+  }, [recognition]);
 
   return {
     isListening,
